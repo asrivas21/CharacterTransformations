@@ -2,6 +2,7 @@
 which finger pair forms the rectangle on both hands."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
@@ -117,3 +118,103 @@ def rectangle_corners(left_hand: np.ndarray, right_hand: np.ndarray,
         right_hand[b, :2],
         right_hand[a, :2],
     ], dtype=np.float32)
+
+
+# --- Multi-sheet "stretched sheet" interaction ----------------------------
+# Finger-pair "gap" -> stable style key. Ring finger intentionally skipped.
+SHEET_PAIRS: dict[str, tuple[int, int]] = {
+    "riso":    (THUMB_TIP, INDEX_TIP),    # (4, 8)
+    "cyano":   (INDEX_TIP, MIDDLE_TIP),   # (8, 12)
+    "stipple": (MIDDLE_TIP, PINKY_TIP),   # (12, 20)
+}
+
+# Tuning thresholds (fractions of palm width, scale-invariant).
+_GAP_MIN_FRAC = 0.25    # min tip-to-tip gap (relative to palm) to count a pair "open"
+_CLUMP_FRAC = 0.55      # left-hand fingertip spread below this => "clumped"
+_CLUMP_EPS = 4.0        # +/- vertical px offset for clump quad left corners
+
+# Fingertips tracked for spread/centroid (skip ring, matching convention).
+_TRACKED_TIPS = (THUMB_TIP, INDEX_TIP, MIDDLE_TIP, PINKY_TIP)
+
+
+@dataclass
+class Sheet:
+    """One styled sheet to warp into a quad. `corners` is (4,2) float32 in the
+    same order as rectangle_corners: [left_a, left_b, right_b, right_a]."""
+    style_key: str
+    corners: np.ndarray
+    control: float
+
+
+def _palm_width(hand: np.ndarray) -> float:
+    """Index-MCP to pinky-MCP distance; keeps metrics scale-invariant."""
+    return float(np.linalg.norm(hand[INDEX_MCP, :2] - hand[PINKY_MCP, :2])) + 1e-6
+
+
+def _fingertip_spread(hand: np.ndarray) -> float:
+    """Mean pairwise distance among the 4 tracked fingertips, normalized by
+    palm width."""
+    tips = np.array([hand[t, :2] for t in _TRACKED_TIPS], dtype=np.float32)
+    dists = []
+    for i in range(len(tips)):
+        for j in range(i + 1, len(tips)):
+            dists.append(np.linalg.norm(tips[i] - tips[j]))
+    return float(np.mean(dists)) / _palm_width(hand)
+
+
+def _is_clumped(hand: np.ndarray) -> bool:
+    """The hand is bunched when its fingertip spread is small."""
+    return _fingertip_spread(hand) < _CLUMP_FRAC
+
+
+def _pair_open(hand: np.ndarray, a: int, b: int) -> bool:
+    """A pair is open when both fingertips are extended AND their tip-to-tip gap
+    exceeds a palm-relative minimum."""
+    ext = _extended_fingers(hand)
+    if a not in ext or b not in ext:
+        return False
+    gap = float(np.linalg.norm(hand[a, :2] - hand[b, :2]))
+    return gap > _GAP_MIN_FRAC * _palm_width(hand)
+
+
+def _clump_centroid(hand: np.ndarray) -> np.ndarray:
+    """Mean of the 4 tracked fingertips (2D)."""
+    tips = np.array([hand[t, :2] for t in _TRACKED_TIPS], dtype=np.float32)
+    return tips.mean(axis=0).astype(np.float32)
+
+
+def _pair_control(left: np.ndarray, right: np.ndarray, a: int, b: int) -> float:
+    """Palm-normalized mean tip-gap across both hands, clipped to [0, 1]."""
+    lg = np.linalg.norm(left[a, :2] - left[b, :2]) / _palm_width(left)
+    rg = np.linalg.norm(right[a, :2] - right[b, :2]) / _palm_width(right)
+    return float(np.clip(0.5 * (lg + rg), 0.0, 1.0))
+
+
+def detect_sheets(left_hand: np.ndarray | None,
+                  right_hand: np.ndarray | None) -> list[Sheet]:
+    """Return all active sheets. Normal mode: one quad per open pair on BOTH
+    hands. Clump mode (left hand bunched): 3 wedge sectors fanning from the left
+    centroid toward the right-hand fingertips."""
+    if left_hand is None or right_hand is None:
+        return []
+    sheets: list[Sheet] = []
+    if _is_clumped(left_hand):
+        anchor = _clump_centroid(left_hand)
+        top = (anchor + np.array([0.0, -_CLUMP_EPS], np.float32)).astype(np.float32)
+        bot = (anchor + np.array([0.0, +_CLUMP_EPS], np.float32)).astype(np.float32)
+        r_ext = _extended_fingers(right_hand)
+        for key, (a, b) in SHEET_PAIRS.items():
+            if a not in r_ext or b not in r_ext:
+                continue
+            corners = np.array([top, bot,
+                                right_hand[b, :2], right_hand[a, :2]], np.float32)
+            sheets.append(Sheet(key, corners,
+                                _pair_control(left_hand, right_hand, a, b)))
+        return sheets
+    for key, (a, b) in SHEET_PAIRS.items():
+        if _pair_open(left_hand, a, b) and _pair_open(right_hand, a, b):
+            corners = np.array([left_hand[a, :2], left_hand[b, :2],
+                                right_hand[b, :2], right_hand[a, :2]], np.float32)
+            sheets.append(Sheet(key, corners,
+                                _pair_control(left_hand, right_hand, a, b)))
+    return sheets

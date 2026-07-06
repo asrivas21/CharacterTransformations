@@ -1,5 +1,6 @@
-"""Risograph style: CMY channel separation, per-channel halftone dots via
-sine-wave thresholding, and slight registration offsets for the printed look.
+"""Risograph style: a single red spot-color halftone on white paper. The image
+is reduced to grayscale and printed as darkness-driven red dots (darker =>
+bigger dots) via sine-wave thresholding, for a one-drum Riso print look.
 
 `control` (finger spread, 0..1) drives the halftone cell size: a wider spread
 prints coarser, chunkier dots."""
@@ -10,14 +11,10 @@ import numpy as np
 
 from styles.base import StyleRenderer
 
-# Spot-color inks (BGR) roughly matching real Riso drums.
-_CYAN = np.array([180, 100, 0], dtype=np.float32)     # blue-cyan
-_MAGENTA = np.array([80, 20, 200], dtype=np.float32)  # fluorescent pink
-_YELLOW = np.array([30, 200, 230], dtype=np.float32)  # warm yellow
-_PAPER = np.array([245, 244, 238], dtype=np.float32)  # off-white stock
-
-# Registration offsets (dx, dy) per channel — the mis-alignment "error".
-_OFFSETS = [(-2, -1), (2, 1), (1, -2)]  # C, M, Y
+# Single Riso "red" drum (BGR) printed on white paper.
+_RISO_RED = np.array([45, 40, 225], dtype=np.float32)
+_PAPER = np.array([255, 255, 255], dtype=np.float32)  # white stock
+_SCREEN_ANGLE = 15.0  # halftone screen angle (degrees)
 
 
 def _halftone_mask(ink: np.ndarray, cell: int, angle_deg: float) -> np.ndarray:
@@ -47,29 +44,14 @@ class RisographStyle(StyleRenderer):
         control = float(np.clip(control, 0.0, 1.0))
         cell = int(round(self.min_cell + control * (self.max_cell - self.min_cell)))
 
-        f = frame.astype(np.float32) / 255.0
-        b, g, r = f[:, :, 0], f[:, :, 1], f[:, :, 2]
-        # CMY ink amounts (subtractive): more ink where the channel is dark.
-        cyan = 1.0 - r
-        magenta = 1.0 - g
-        yellow = 1.0 - b
+        # Grayscale -> ink amount (darkness). Darker pixels grow bigger dots.
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+        ink = 1.0 - gray
+        mask = _halftone_mask(ink, cell, _SCREEN_ANGLE)  # (H,W) 0/1
 
-        # Classic screen angles (C 15, M 75, Y 0) to reduce moire.
-        masks = [
-            _halftone_mask(cyan, cell, 15.0),
-            _halftone_mask(magenta, cell, 75.0),
-            _halftone_mask(yellow, cell, 0.0),
-        ]
-        inks = [_CYAN, _MAGENTA, _YELLOW]
-
-        # Start from paper white, multiply down where each ink dot lands, with a
-        # per-channel registration shift.
+        # White paper everywhere; lay red ink only where a dot lands.
         out = np.tile(_PAPER, (frame.shape[0], frame.shape[1], 1))
-        for mask, ink, (dx, dy) in zip(masks, inks, _OFFSETS):
-            shifted = np.roll(np.roll(mask, dy, axis=0), dx, axis=1)
-            cov = shifted[:, :, None]  # (H,W,1)
-            # Multiplicative ink: paper * (1-cov) + ink * cov, but keep it
-            # subtractive so overlapping inks darken realistically.
-            out = out * (1.0 - cov) + (out * (ink / 255.0)) * cov
+        cov = mask[:, :, None]  # (H,W,1)
+        out = out * (1.0 - cov) + _RISO_RED * cov
 
         return np.clip(out, 0, 255).astype(np.uint8)

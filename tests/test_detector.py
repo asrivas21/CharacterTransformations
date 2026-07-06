@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.join(
 
 from gesture.detector import (  # noqa: E402
     Show, detect_show, rectangle_corners, _extended_fingers,
+    detect_sheets, Sheet, SHEET_PAIRS, _is_clumped, _pair_open,
+    _fingertip_spread, _pair_control, _CLUMP_EPS,
     WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP,
     INDEX_PIP, MIDDLE_PIP, RING_PIP, PINKY_PIP,
 )
@@ -39,6 +41,23 @@ def make_hand(extended):
         hand[tip] = [x, -100 if tip in extended else -30, 0]
     # Thumb: index MCP is at (0, -30), pinky MCP at (30, -30) => palm width 30.
     hand[THUMB_TIP] = [-40, -30, 0] if THUMB_TIP in extended else [8, -25, 0]
+    return hand
+
+
+def make_spread_hand():
+    """A fully open hand: all tracked fingertips extended and spread wide."""
+    return make_hand({THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP})
+
+
+def make_clumped_hand():
+    """A bunched hand: normal palm width but all fingertips clustered together,
+    so the fingertip spread falls below the clump threshold."""
+    hand = make_hand(set())
+    # Keep MCPs (palm width 30) but pull all tracked tips into a tight cluster.
+    hand[THUMB_TIP] = [14, -58, 0]
+    hand[INDEX_TIP] = [15, -60, 0]
+    hand[MIDDLE_TIP] = [16, -60, 0]
+    hand[PINKY_TIP] = [17, -59, 0]
     return hand
 
 
@@ -99,6 +118,75 @@ class TestRectangleCorners(unittest.TestCase):
         np.testing.assert_allclose(corners[1], left[INDEX_TIP, :2])
         np.testing.assert_allclose(corners[2], right[INDEX_TIP, :2])
         np.testing.assert_allclose(corners[3], right[THUMB_TIP, :2])
+
+
+class TestSheetHelpers(unittest.TestCase):
+    def test_is_clumped(self):
+        self.assertTrue(_is_clumped(make_clumped_hand()))
+        self.assertFalse(_is_clumped(make_spread_hand()))
+
+    def test_fingertip_spread_ordering(self):
+        self.assertGreater(_fingertip_spread(make_spread_hand()),
+                           _fingertip_spread(make_clumped_hand()))
+
+    def test_pair_open_true(self):
+        h = make_hand({THUMB_TIP, INDEX_TIP})
+        self.assertTrue(_pair_open(h, THUMB_TIP, INDEX_TIP))
+
+    def test_pair_open_false_curled_tip(self):
+        h = make_hand({INDEX_TIP})  # thumb curled
+        self.assertFalse(_pair_open(h, THUMB_TIP, INDEX_TIP))
+
+    def test_pair_open_false_small_gap(self):
+        h = make_hand({INDEX_TIP, MIDDLE_TIP})
+        h[MIDDLE_TIP] = [1, -100, 0]  # both extended but tips nearly touching
+        self.assertFalse(_pair_open(h, INDEX_TIP, MIDDLE_TIP))
+
+    def test_pair_control_in_range(self):
+        h = make_spread_hand()
+        c = _pair_control(h, h, THUMB_TIP, INDEX_TIP)
+        self.assertGreaterEqual(c, 0.0)
+        self.assertLessEqual(c, 1.0)
+
+
+class TestDetectSheets(unittest.TestCase):
+    def test_missing_hand_returns_empty(self):
+        h = make_spread_hand()
+        self.assertEqual(detect_sheets(None, h), [])
+        self.assertEqual(detect_sheets(h, None), [])
+
+    def test_normal_single_pair(self):
+        h = make_hand({THUMB_TIP, INDEX_TIP})
+        sheets = detect_sheets(h, h)
+        self.assertEqual(len(sheets), 1)
+        s = sheets[0]
+        self.assertIsInstance(s, Sheet)
+        self.assertEqual(s.style_key, "riso")
+        self.assertEqual(s.corners.shape, (4, 2))
+        np.testing.assert_allclose(s.corners[0], h[THUMB_TIP, :2])
+        np.testing.assert_allclose(s.corners[1], h[INDEX_TIP, :2])
+        np.testing.assert_allclose(s.corners[2], h[INDEX_TIP, :2])
+        np.testing.assert_allclose(s.corners[3], h[THUMB_TIP, :2])
+
+    def test_normal_multiple_pairs(self):
+        h = make_spread_hand()
+        keys = {s.style_key for s in detect_sheets(h, h)}
+        self.assertEqual(keys, set(SHEET_PAIRS.keys()))
+
+    def test_clump_mode_fans_wedges(self):
+        left = make_clumped_hand()
+        right = make_spread_hand()
+        sheets = detect_sheets(left, right)
+        self.assertEqual(len(sheets), 3)
+        for s in sheets:
+            a, b = SHEET_PAIRS[s.style_key]
+            # Left corners differ only by +/- _CLUMP_EPS on the y axis.
+            self.assertAlmostEqual(s.corners[0][0], s.corners[1][0], places=4)
+            self.assertAlmostEqual(s.corners[1][1] - s.corners[0][1],
+                                   2 * _CLUMP_EPS, places=4)
+            # Right corners equal the right-hand fingertips.
+            np.testing.assert_allclose(s.corners[2], right[b, :2])
+            np.testing.assert_allclose(s.corners[3], right[a, :2])
 
 
 if __name__ == "__main__":

@@ -27,12 +27,16 @@ class FrameLandmarks:
 
 
 class LandmarkExtractor:
-    def __init__(self):
+    def __init__(self, model_complexity: int = 1,
+                 refine_face_landmarks: bool = True):
+        # `model_complexity` (0=fast, 1=balanced, 2=accurate) and
+        # `refine_face_landmarks` (iris landmarks) are the main speed/quality
+        # knobs. Hands-only consumers can pass 0 / False for a big speed win.
         self.holistic = mp_holistic.Holistic(
             static_image_mode=False,
-            model_complexity=1,        # 0=fast, 1=balanced, 2=accurate
+            model_complexity=model_complexity,
             smooth_landmarks=True,
-            refine_face_landmarks=True,  # CRITICAL: enables iris landmarks
+            refine_face_landmarks=refine_face_landmarks,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
