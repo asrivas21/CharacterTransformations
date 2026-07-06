@@ -1,0 +1,105 @@
+"""Tests for the rectangle gesture detector."""
+import os
+import sys
+import unittest
+
+import numpy as np
+
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+
+from gesture.detector import (  # noqa: E402
+    Show, detect_show, rectangle_corners, _extended_fingers,
+    WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP,
+    INDEX_PIP, MIDDLE_PIP, RING_PIP, PINKY_PIP,
+)
+
+# (mcp index, pip index, tip index, x column) for the four non-thumb fingers.
+_FINGERS = [
+    (5, INDEX_PIP, INDEX_TIP, 0),
+    (9, MIDDLE_PIP, MIDDLE_TIP, 10),
+    (13, RING_PIP, RING_TIP, 20),
+    (17, PINKY_PIP, PINKY_TIP, 30),
+]
+
+
+def make_hand(extended):
+    """Build a plausible (21, 3) hand where the given fingertips are extended.
+
+    Fingers point "up" (negative y) from a wrist at y=0: MCP at y=-30, PIP at
+    y=-50. An extended tip reaches well past the PIP (y=-100); a curled tip folds
+    back toward the palm (y=-30, i.e. closer to the wrist than its PIP), matching
+    the detector's PIP-relative extension test. The thumb tip sits far from the
+    index knuckle when extended and near the palm when curled."""
+    hand = np.zeros((21, 3), dtype=np.float32)
+    hand[WRIST] = [15, 0, 0]
+    for mcp, pip, tip, x in _FINGERS:
+        hand[mcp] = [x, -30, 0]
+        hand[pip] = [x, -50, 0]
+        hand[tip] = [x, -100 if tip in extended else -30, 0]
+    # Thumb: index MCP is at (0, -30), pinky MCP at (30, -30) => palm width 30.
+    hand[THUMB_TIP] = [-40, -30, 0] if THUMB_TIP in extended else [8, -25, 0]
+    return hand
+
+
+class TestExtendedFingers(unittest.TestCase):
+    def test_all_extended(self):
+        hand = make_hand({THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP})
+        self.assertEqual(
+            _extended_fingers(hand),
+            {THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP})
+
+    def test_none_extended(self):
+        self.assertEqual(_extended_fingers(make_hand(set())), set())
+
+    def test_subset_extended(self):
+        hand = make_hand({INDEX_TIP, MIDDLE_TIP})
+        self.assertEqual(_extended_fingers(hand), {INDEX_TIP, MIDDLE_TIP})
+
+
+class TestDetectShow(unittest.TestCase):
+    def test_naruto(self):
+        h = make_hand({THUMB_TIP, INDEX_TIP})
+        self.assertEqual(detect_show(h, h), Show.NARUTO)
+
+    def test_atla(self):
+        h = make_hand({INDEX_TIP, MIDDLE_TIP})
+        self.assertEqual(detect_show(h, h), Show.ATLA)
+
+    def test_jjk(self):
+        h = make_hand({MIDDLE_TIP, PINKY_TIP})
+        self.assertEqual(detect_show(h, h), Show.JJK)
+
+    def test_missing_hand_is_none(self):
+        h = make_hand({THUMB_TIP, INDEX_TIP})
+        self.assertEqual(detect_show(None, h), Show.NONE)
+        self.assertEqual(detect_show(h, None), Show.NONE)
+
+    def test_mismatched_hands_is_none(self):
+        left = make_hand({THUMB_TIP, INDEX_TIP})
+        right = make_hand({INDEX_TIP, MIDDLE_TIP})
+        self.assertEqual(detect_show(left, right), Show.NONE)
+
+    def test_no_pair_is_none(self):
+        h = make_hand({INDEX_TIP})
+        self.assertEqual(detect_show(h, h), Show.NONE)
+
+
+class TestRectangleCorners(unittest.TestCase):
+    def test_none_show_returns_none(self):
+        h = make_hand({THUMB_TIP, INDEX_TIP})
+        self.assertIsNone(rectangle_corners(h, h, Show.NONE))
+
+    def test_corner_order(self):
+        left = make_hand({THUMB_TIP, INDEX_TIP})
+        right = make_hand({THUMB_TIP, INDEX_TIP})
+        corners = rectangle_corners(left, right, Show.NARUTO)
+        self.assertEqual(corners.shape, (4, 2))
+        np.testing.assert_allclose(corners[0], left[THUMB_TIP, :2])
+        np.testing.assert_allclose(corners[1], left[INDEX_TIP, :2])
+        np.testing.assert_allclose(corners[2], right[INDEX_TIP, :2])
+        np.testing.assert_allclose(corners[3], right[THUMB_TIP, :2])
+
+
+if __name__ == "__main__":
+    unittest.main()
