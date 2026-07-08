@@ -125,7 +125,7 @@ def rectangle_corners(left_hand: np.ndarray, right_hand: np.ndarray,
 SHEET_PAIRS: dict[str, tuple[int, int]] = {
     "riso":    (THUMB_TIP, INDEX_TIP),    # (4, 8)
     "cyano":   (INDEX_TIP, MIDDLE_TIP),   # (8, 12)
-    "stipple": (MIDDLE_TIP, PINKY_TIP),   # (12, 20)
+    "greenwhite": (MIDDLE_TIP, PINKY_TIP),  # (12, 20)
 }
 
 # Tuning thresholds (fractions of palm width, scale-invariant).

@@ -14,16 +14,15 @@ from features.sheet import (
 from features import anime_features
 from hud import draw_hud
 from styles.risograph import RisographStyle
-from styles.stippling import StipplingStyle
+from styles.greenscreen import GreenScreenStyle
 
 # Stable string keys shared with gesture.detector.SHEET_PAIRS.
-# Stippling uses a coarser lattice and lower density so the sheet reads as a
-# picture (sparse dots) rather than uniform TV static. The "cyano" sheet is an
-# anime tracker (Sharingan eyes on the camera feed), handled specially below.
+# The "greenwhite" sheet segments the person out as solid white on a solid
+# green background. The "cyano" sheet is an anime tracker (Sharingan eyes on
+# the camera feed), handled specially below.
 STYLES = {
     "riso": RisographStyle(),
-    "stipple": StipplingStyle(min_density=0.08, max_density=0.32,
-                              grid=120, dot_radius=1),
+    "greenwhite": GreenScreenStyle(),
 }
 
 _EMA_ALPHA = 0.5        # corner smoothing (higher => snappier)
